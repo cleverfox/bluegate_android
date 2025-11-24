@@ -76,6 +76,57 @@ class KeyManager(private val keyStore: KeyStore) {
         return generateNewKeyPair(alias)
     }
 
+//    fun toRawSignature(asn1Signature: ByteArray): ByteArray {
+//        val r = asn1Signature.sliceArray(4 until 4 + 32)
+//        val s = asn1Signature.sliceArray(4 + 32 + 2 until asn1Signature.size)
+//        return r + s
+//    }
+    fun toRawSignature(derSig: ByteArray, keySizeBytes: Int = 32): ByteArray {
+        var offset = 0
+
+        // Expect SEQUENCE (0x30)
+        require(derSig[offset++] == 0x30.toByte()) { "Not a DER SEQUENCE" }
+
+        // Total length (we assume it fits in one byte; enough for ECDSA P-256)
+        val seqLen = derSig[offset++].toInt() and 0xFF
+        require(seqLen + 2 == derSig.size) { "Bad SEQUENCE length" }
+
+        // INTEGER r
+        require(derSig[offset++] == 0x02.toByte()) { "Expected INTEGER for r" }
+        val rLen = derSig[offset++].toInt() and 0xFF
+        var rBytes = derSig.copyOfRange(offset, offset + rLen)
+        offset += rLen
+
+        // INTEGER s
+        require(derSig[offset++] == 0x02.toByte()) { "Expected INTEGER for s" }
+        val sLen = derSig[offset++].toInt() and 0xFF
+        var sBytes = derSig.copyOfRange(offset, offset + sLen)
+        // offset += sLen   // not needed further
+
+        // DER encodes them as signed integers -> may have leading 0x00.
+        // We want unsigned, fixed-size keySizeBytes, so:
+        // 1) Trim leading zeros if longer than keySizeBytes.
+        // 2) Left-pad with zeros if shorter than keySizeBytes.
+
+        if (rBytes.size > keySizeBytes) {
+            // Trim leading zeros (keep least significant bytes)
+            rBytes = rBytes.copyOfRange(rBytes.size - keySizeBytes, rBytes.size)
+        }
+        if (sBytes.size > keySizeBytes) {
+            sBytes = sBytes.copyOfRange(sBytes.size - keySizeBytes, sBytes.size)
+        }
+
+        val rPadded = ByteArray(keySizeBytes)
+        val sPadded = ByteArray(keySizeBytes)
+
+        // Left-pad
+        System.arraycopy(rBytes, 0, rPadded, keySizeBytes - rBytes.size, rBytes.size)
+        System.arraycopy(sBytes, 0, sPadded, keySizeBytes - sBytes.size, sBytes.size)
+
+        // Final: r || s
+        return rPadded + sPadded
+    }
+
     private fun generateNewKeyPair(alias: String): KeyPair {
         val kpg: KeyPairGenerator = KeyPairGenerator.getInstance(
             KeyProperties.KEY_ALGORITHM_EC,

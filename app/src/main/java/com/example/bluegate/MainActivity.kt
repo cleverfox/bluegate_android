@@ -33,6 +33,7 @@ import java.security.KeyStore
 import java.security.MessageDigest
 import java.security.PublicKey
 import java.security.Signature
+import java.security.SecureRandom
 
 class MainActivity : AppCompatActivity() {
 
@@ -42,6 +43,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var keyPair: KeyPair
     private lateinit var rawPublicKey: ByteArray
     private lateinit var clientNonce: ByteArray
+    private lateinit var keyManager : KeyManager
 
     private val handler = Handler(Looper.getMainLooper())
 
@@ -83,7 +85,7 @@ class MainActivity : AppCompatActivity() {
 
         val keyStore = KeyStore.getInstance("AndroidKeyStore")
         keyStore.load(null)
-        val keyManager = KeyManager(keyStore)
+        keyManager = KeyManager(keyStore)
         keyPair = keyManager.getOrCreateKeyPair()
 
         val raw_key = keyManager.extractUncompressedECPoint(keyPair.public.encoded)
@@ -307,27 +309,13 @@ class MainActivity : AppCompatActivity() {
 
             @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
             override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+                Log.e(TAG, "Connection state change: status=$status, newState=$newState")
                 if (status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothProfile.STATE_CONNECTED) {
+                    clientNonce = ByteArray(32)
+                    SecureRandom().nextBytes(clientNonce)
                     Log.d(TAG, "Connected, requesting MTU")
-                    // you can discover services first or after MTU; both patterns are used
-//                    gatt.discoverServices()
                     gatt.requestMtu(85) // common “max” on Android
-                    clientNonce = (System.currentTimeMillis() / 1000).toString(16).toByteArray()
-                } else {
-                    Log.e(TAG, "Connection state change: status=$status, newState=$newState")
-                }
-
-                /*
-                if (newState == BluetoothProfile.STATE_CONNECTED) {
-                    if (ActivityCompat.checkSelfPermission(
-                            this@MainActivity,
-                            Manifest.permission.BLUETOOTH_CONNECT
-                        ) != PackageManager.PERMISSION_GRANTED
-                    ) {
-                        return
-                    }
-                    gatt.discoverServices()
-                } else*/ if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                }  else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                     handler.post { view.setBackgroundColor(Color.WHITE) }
                     if (ActivityCompat.checkSelfPermission(
                             this@MainActivity,
@@ -343,8 +331,6 @@ class MainActivity : AppCompatActivity() {
             override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
                 Log.d(TAG, "MTU changed: mtu=$mtu, status=$status")
                 if (status == BluetoothGatt.GATT_SUCCESS) {
-                    // Now you can safely send up to (mtu - 3) bytes in a single write
-                    // e.g. start your writes here or set a flag that MTU is ready
                     gatt.discoverServices()
                 }
             }
@@ -398,15 +384,24 @@ class MainActivity : AppCompatActivity() {
                     BleManager.CLIENT_NONCE_UUID -> bleManager?.writeCharacteristic(gatt, BleManager.CLIENT_KEY_UUID, rawPublicKey)
                     BleManager.CLIENT_KEY_UUID -> {
                         val dataToSign = nonce!! + clientNonce
-                        val sha256 = MessageDigest.getInstance("SHA-256").digest(dataToSign)
-                        Log.i(TAG,"ToSign ${dataToSign.joinToString("") { "%02x".format(it) }}")
-                        Log.i(TAG, "Hash ${sha256.joinToString("") { "%02x".format(it) }}")
+//                        Log.i(TAG, "DataToSign ${nonce!!.joinToString("") { "%02x".format(it) }} ${clientNonce.joinToString("") { "%02x".format(it) }}")
+
+//                        val sha256 = MessageDigest.getInstance("SHA-256").digest(dataToSign)
+//                        Log.i(TAG, "Hash ${sha256.joinToString("") { "%02x".format(it) }}")
 
 
-                        val signature = Signature.getInstance(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) "Ed25519" else "SHA256withECDSA").apply {
+//                        Log.i(TAG, "Public key ${keyPair.public.encoded.joinToString("") { "%02x".format(it) }}")
+//                        Log.i(TAG, "Raw Public key ${rawPublicKey.joinToString("") { "%02x".format(it) }}")
+//                        Log.i(TAG,"Data to sign: ${dataToSign.joinToString("") { "%02x".format(it) }}")
+
+                        var signature = Signature.getInstance( "SHA256withECDSA").apply {
                             initSign(keyPair.private)
-                            update(sha256)
+                            update(dataToSign)
                         }.sign()
+
+//                        Log.i(TAG,"DER signature: ${signature.joinToString("") { "%02x".format(it) }}")
+                        signature = keyManager.toRawSignature(signature)
+//                        Log.i(TAG,"Signature: ${signature.joinToString("") { "%02x".format(it) }}")
 
                         bleManager?.writeCharacteristic(gatt, BleManager.AUTHENTICATE_UUID, signature)
                     }
