@@ -19,7 +19,7 @@ import android.view.View
 import androidx.annotation.RequiresPermission
 import java.util.UUID
 
-class BleManager(private val context: Context, private val bluetoothAdapter: BluetoothAdapter) {
+class BleManager(private val context: Context, val bluetoothAdapter: BluetoothAdapter) {
 
     private val scanner: BluetoothLeScanner? = bluetoothAdapter.bluetoothLeScanner
 
@@ -33,13 +33,34 @@ class BleManager(private val context: Context, private val bluetoothAdapter: Blu
         val CLIENT_NONCE_UUID: UUID = UUID.fromString("00000103-0000-1000-8000-00805F9B34FB")
         val CLIENT_KEY_ACK_UUID: UUID = UUID.fromString("00000104-0000-1000-8000-00805F9B34FB")
         val AUTHENTICATE_ACK_UUID: UUID = UUID.fromString("00000105-0000-1000-8000-00805F9B34FB")
+        val ADVERTISING_UUID: UUID = UUID.fromString("0000180f-0000-1000-8000-00805f9b34fb")
+        val GATE_SERVICE_UUID: UUID = UUID.fromString("6a7e6a7e-4929-42d0-0000-fcc5a35e13f1")
+
+        // Authentication Characteristics
+//        val NONCE_UUID: UUID = UUID.fromString("6a7e6a7e-4929-42d0-0100-fcc5a35e13f1")
+//        val AUTHENTICATE_UUID: UUID = UUID.fromString("6a7e6a7e-4929-42d0-0101-fcc5a35e13f1")
+//        val CLIENT_KEY_UUID: UUID = UUID.fromString("6a7e6a7e-4929-42d0-0102-fcc5a35e13f1")
+//        val CLIENT_NONCE_UUID: UUID = UUID.fromString("6a7e6a7e-4929-42d0-0103-fcc5a35e13f1")
+//        val CLIENT_KEY_ACK_UUID: UUID = UUID.fromString("6a7e6a7e-4929-42d0-0104-fcc5a35e13f1")
+//        val AUTHENTICATE_ACK_UUID: UUID = UUID.fromString("6a7e6a7e-4929-42d0-0105-fcc5a35e13f1")
+        val ACTION_UUID: UUID = UUID.fromString("00000106-0000-1000-8000-00805F9B34FB")
+        val PAYLOAD_UUID: UUID = UUID.fromString("00000107-0000-1000-8000-00805F9B34FB")
+        val PERMISSIONS_UUID: UUID = UUID.fromString("00000108-0000-1000-8000-00805F9B34FB")
+
+        // Management Characteristics (Admin Only)
+        val MANAGEMENT_ACTION_UUID: UUID = UUID.fromString("00001100-0000-1000-8000-00805F9B34FB")
+        val MANAGEMENT_KEY_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+        val MANAGEMENT_PARAM_ID_UUID: UUID = UUID.fromString("00001102-0000-1000-8000-00805F9B34FB")
+        val MANAGEMENT_PARAM_VAL_UUID: UUID = UUID.fromString("00001103-0000-1000-8000-00805F9B34FB")
+        val MANAGEMENT_NAME_UUID: UUID = UUID.fromString("00001104-0000-1000-8000-00805F9B34FB")
+        val MANAGEMENT_RESULT_UUID: UUID = UUID.fromString("00001105-0000-1000-8000-00805F9B34FB")
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_SCAN)
     fun startScanning(scanCallback: ScanCallback) {
         Log.d(TAG, "startScanning")
         val scanFilter = ScanFilter.Builder()
-            .setServiceUuid(ParcelUuid(DEVICE_UUID))
+            .setServiceUuid(ParcelUuid(ADVERTISING_UUID))
             .build()
 
         val scanSettings = ScanSettings.Builder()
@@ -70,7 +91,7 @@ class BleManager(private val context: Context, private val bluetoothAdapter: Blu
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun writeCharacteristic(gatt: BluetoothGatt, uuid: UUID, value: ByteArray) {
-        val service = gatt.getService(SERVICE_UUID)
+        val service = gatt.getService(GATE_SERVICE_UUID)
         val characteristic = service?.getCharacteristic(uuid)
         if (characteristic == null) {
             Log.e(TAG, "Characteristic not found: $uuid")
@@ -80,7 +101,7 @@ class BleManager(private val context: Context, private val bluetoothAdapter: Blu
                     Log.d(TAG, "  - ${char.uuid}")
                 }
             } ?: run {
-                Log.e(TAG, "Service not found: $SERVICE_UUID")
+                Log.e(TAG, "Service not found: $GATE_SERVICE_UUID")
                 gatt.services?.forEach { s ->
                     Log.d(TAG, "Available service: ${s.uuid}")
                 }
@@ -103,7 +124,7 @@ class BleManager(private val context: Context, private val bluetoothAdapter: Blu
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun readCharacteristic(gatt: BluetoothGatt, uuid: UUID) {
-        val service = gatt.getService(SERVICE_UUID)
+        val service = gatt.getService(GATE_SERVICE_UUID)
         val characteristic = service?.getCharacteristic(uuid)
         if (characteristic == null) {
             Log.e(TAG, "Characteristic not found: $uuid")
@@ -113,7 +134,7 @@ class BleManager(private val context: Context, private val bluetoothAdapter: Blu
                     Log.d(TAG, "  - ${char.uuid}")
                 }
             } ?: run {
-                Log.e(TAG, "Service not found: $SERVICE_UUID")
+                Log.e(TAG, "Service not found: $GATE_SERVICE_UUID")
                 gatt.services?.forEach { s ->
                     Log.d(TAG, "Available service: ${s.uuid}")
                 }

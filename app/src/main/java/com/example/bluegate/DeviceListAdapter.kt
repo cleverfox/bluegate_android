@@ -12,11 +12,13 @@ import java.util.concurrent.TimeUnit
 
 class DeviceListAdapter(
     private val onCheckClicked: (ScanResult, View) -> Unit,
-    private val onOpenClicked: (ScanResult, View) -> Unit
+    private val onOpenClicked: (ScanResult, View) -> Unit,
+    private val onManageClicked: (ScanResult) -> Unit
 ) : RecyclerView.Adapter<DeviceListAdapter.ViewHolder>() {
 
     private val devices = mutableListOf<ScanResult>()
     private val lastUpdated = mutableMapOf<String, Long>()
+    private val permissions = mutableMapOf<String, Int>()
     private val throttlePeriod = TimeUnit.SECONDS.toMillis(1)
 
     fun addDevice(device: ScanResult) {
@@ -41,6 +43,14 @@ class DeviceListAdapter(
         }
     }
 
+    fun updatePermissions(deviceAddress: String, permissionLevel: Int) {
+        permissions[deviceAddress] = permissionLevel
+        val index = devices.indexOfFirst { it.device.address == deviceAddress }
+        if (index != -1) {
+            notifyItemChanged(index)
+        }
+    }
+
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
         val view = LayoutInflater.from(parent.context)
             .inflate(R.layout.device_list_item, parent, false)
@@ -57,6 +67,14 @@ class DeviceListAdapter(
 
         holder.checkButton.setOnClickListener { onCheckClicked(device, holder.deviceContainer) }
         holder.openButton.setOnClickListener { onOpenClicked(device, holder.deviceContainer) }
+        holder.manageButton.setOnClickListener { onManageClicked(device) }
+
+        val permissionLevel = permissions[device.device.address] ?: 0
+        if ((permissionLevel and 0x80) == 0x80) { // Admin bit is set
+            holder.manageButton.visibility = View.VISIBLE
+        } else {
+            holder.manageButton.visibility = View.GONE
+        }
     }
 
     override fun getItemCount() = devices.size
@@ -68,5 +86,6 @@ class DeviceListAdapter(
         val serviceUuids: TextView = itemView.findViewById(R.id.service_uuids)
         val checkButton: Button = itemView.findViewById(R.id.check_button)
         val openButton: Button = itemView.findViewById(R.id.open_button)
+        val manageButton: Button = itemView.findViewById(R.id.manage_button)
     }
 }

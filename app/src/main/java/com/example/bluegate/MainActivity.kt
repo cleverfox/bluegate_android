@@ -2,6 +2,7 @@ package com.example.bluegate
 
 import android.Manifest
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
@@ -107,7 +108,8 @@ class MainActivity : AppCompatActivity() {
 
         deviceListAdapter = DeviceListAdapter(
             onCheckClicked = { result, view -> handleCheck(result, view) },
-            onOpenClicked = { result, view -> handleOpen(result, view) }
+            onOpenClicked = { result, view -> handleOpen(result, view) },
+            onManageClicked = { result -> handleManage(result) }
         )
         binding.contentMain.devicesRecyclerView.adapter = deviceListAdapter
         binding.contentMain.devicesRecyclerView.layoutManager = LinearLayoutManager(this)
@@ -197,6 +199,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun handleManage(result: ScanResult) {
+        val intent = Intent(this, AdminDashboardActivity::class.java)
+        intent.putExtra("device_address", result.device.address)
+        startActivity(intent)
+    }
+
     private fun handleCheck(result: ScanResult, view: View) {
         Log.d(TAG, "handleCheck: starting for device ${result.device.address}")
         if (ActivityCompat.checkSelfPermission(
@@ -282,6 +290,31 @@ class MainActivity : AppCompatActivity() {
                     val success = value.firstOrNull() == 1.toByte()
                     Log.d(TAG, "onCharacteristicRead: CLIENT_KEY_ACK_UUID success: $success")
                     handler.post { view.setBackgroundColor(if (success) Color.GREEN else Color.RED) }
+                    if (success) {
+                        if (ActivityCompat.checkSelfPermission(
+                                this@MainActivity,
+                                Manifest.permission.BLUETOOTH_CONNECT
+                            ) != PackageManager.PERMISSION_GRANTED
+                        ) {
+                            return
+                        }
+                        bleManager?.readCharacteristic(gatt, BleManager.PERMISSIONS_UUID)
+                    } else {
+                        handler.postDelayed({ bleManager?.createFadeAnimator(view)?.start() }, 2000)
+                        if (ActivityCompat.checkSelfPermission(
+                                this@MainActivity,
+                                Manifest.permission.BLUETOOTH_CONNECT
+                            ) != PackageManager.PERMISSION_GRANTED
+                        ) {
+                            return
+                        }
+                        bleManager?.disconnect(gatt)
+                    }
+                } else if (characteristic.uuid == BleManager.PERMISSIONS_UUID) {
+                    val permissionLevel = value.firstOrNull()?.toInt() ?: 0
+                    runOnUiThread {
+                        deviceListAdapter.updatePermissions(gatt.device.address, permissionLevel)
+                    }
                     handler.postDelayed({ bleManager?.createFadeAnimator(view)?.start() }, 2000)
                     if (ActivityCompat.checkSelfPermission(
                             this@MainActivity,
