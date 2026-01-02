@@ -25,15 +25,13 @@ class BleManager(private val context: Context, val bluetoothAdapter: BluetoothAd
 
     companion object {
         private const val TAG = "BleManager"
-        val DEVICE_UUID: UUID = UUID.fromString("0000180f-0000-1000-8000-00805f9b34fb")
-        val SERVICE_UUID: UUID = UUID.fromString("6a7e6a7e-4929-42d0-0000-fcc5a35e13f1")
         val NONCE_UUID: UUID = UUID.fromString("00000100-0000-1000-8000-00805F9B34FB")
         val AUTHENTICATE_UUID: UUID = UUID.fromString("00000101-0000-1000-8000-00805F9B34FB")
         val CLIENT_KEY_UUID: UUID = UUID.fromString("00000102-0000-1000-8000-00805F9B34FB")
         val CLIENT_NONCE_UUID: UUID = UUID.fromString("00000103-0000-1000-8000-00805F9B34FB")
         val CLIENT_KEY_ACK_UUID: UUID = UUID.fromString("00000104-0000-1000-8000-00805F9B34FB")
         val AUTHENTICATE_ACK_UUID: UUID = UUID.fromString("00000105-0000-1000-8000-00805F9B34FB")
-        val ADVERTISING_UUID: UUID = UUID.fromString("0000180f-0000-1000-8000-00805f9b34fb")
+//        val ADVERTISING_UUID: UUID = UUID.fromString("0000180f-0000-1000-8000-00805f9b34fb")
         val GATE_SERVICE_UUID: UUID = UUID.fromString("6a7e6a7e-4929-42d0-0000-fcc5a35e13f1")
 
         // Authentication Characteristics
@@ -60,7 +58,7 @@ class BleManager(private val context: Context, val bluetoothAdapter: BluetoothAd
     fun startScanning(scanCallback: ScanCallback) {
         Log.d(TAG, "startScanning")
         val scanFilter = ScanFilter.Builder()
-            .setServiceUuid(ParcelUuid(ADVERTISING_UUID))
+            .setServiceUuid(ParcelUuid(GATE_SERVICE_UUID))
             .build()
 
         val scanSettings = ScanSettings.Builder()
@@ -142,8 +140,9 @@ class BleManager(private val context: Context, val bluetoothAdapter: BluetoothAd
             disconnect(gatt)
             return
         }
-        Log.d(TAG, "Reading from characteristic: $uuid")
-        gatt.readCharacteristic(characteristic)
+        val res = gatt.readCharacteristic(characteristic)
+        Log.d(TAG, "Reading from characteristic: $uuid = $res")
+        res
     }
 
     fun createFadeAnimator(view: View): ObjectAnimator {

@@ -31,8 +31,6 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import com.example.bluegate.databinding.ActivityMainBinding
 import java.security.KeyPair
 import java.security.KeyStore
-import java.security.MessageDigest
-import java.security.PublicKey
 import java.security.Signature
 import java.security.SecureRandom
 
@@ -91,7 +89,7 @@ class MainActivity : AppCompatActivity() {
 
         val raw_key = keyManager.extractUncompressedECPoint(keyPair.public.encoded)
         rawPublicKey = keyManager.compressPublicKeyPoint(raw_key!!)
-        Log.i(TAG, "My public key ${rawPublicKey?.joinToString("") { "%02x".format(it) }}")
+        Log.i(TAG, "My public key ${rawPublicKey.joinToString("") { "%02x".format(it) }}")
 
         val publicKeyHex = rawPublicKey.joinToString("") { "%02x".format(it) }
 
@@ -200,9 +198,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleManage(result: ScanResult) {
-        val intent = Intent(this, AdminDashboardActivity::class.java)
-        intent.putExtra("device_address", result.device.address)
-        startActivity(intent)
+        authenticate(result.device, null, 128)
     }
 
     private fun handleCheck(result: ScanResult, view: View) {
@@ -219,24 +215,12 @@ class MainActivity : AppCompatActivity() {
             override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
                 if (status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothProfile.STATE_CONNECTED) {
                     Log.d(TAG, "Connected, requesting MTU")
-                    // you can discover services first or after MTU; both patterns are used
-//                    gatt.discoverServices()
                     gatt.requestMtu(85) // common “max” on Android
                 } else {
                     Log.e(TAG, "Connection state change: status=$status, newState=$newState")
                 }
 
-                /*
-                if (newState == BluetoothProfile.STATE_CONNECTED) {
-                    if (ActivityCompat.checkSelfPermission(
-                            this@MainActivity,
-                            Manifest.permission.BLUETOOTH_CONNECT
-                        ) != PackageManager.PERMISSION_GRANTED
-                    ) {
-                        return
-                    }
-                    gatt.discoverServices()
-                } else*/ if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                     handler.post { view.setBackgroundColor(Color.WHITE) }
                     if (ActivityCompat.checkSelfPermission(
                             this@MainActivity,
@@ -252,8 +236,6 @@ class MainActivity : AppCompatActivity() {
             override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
                 Log.d(TAG, "MTU changed: mtu=$mtu, status=$status")
                 if (status == BluetoothGatt.GATT_SUCCESS) {
-                    // Now you can safely send up to (mtu - 3) bytes in a single write
-                    // e.g. start your writes here or set a flag that MTU is ready
                     gatt.discoverServices()
                 }
             }
@@ -330,6 +312,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleOpen(result: ScanResult, view: View) {
+        authenticate(result.device, view, 1)
+    }
+
+    private fun authenticate(device: BluetoothDevice, view: View?, action: Int) {
+        Log.d(TAG, "Authenticating for device ${device.address}, action: $action")
         if (ActivityCompat.checkSelfPermission(
                 this,
                 Manifest.permission.BLUETOOTH_CONNECT
@@ -337,19 +324,19 @@ class MainActivity : AppCompatActivity() {
         ) {
             return
         }
-        bleManager?.connect(result.device, object : BluetoothGattCallback() {
+        bleManager?.connect(device, object : BluetoothGattCallback() {
             var nonce: ByteArray? = null
 
             @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
             override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-                Log.e(TAG, "Connection state change: status=$status, newState=$newState")
+                Log.d(TAG, "Auth Connection state change: status=$status, newState=$newState")
                 if (status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothProfile.STATE_CONNECTED) {
                     clientNonce = ByteArray(32)
                     SecureRandom().nextBytes(clientNonce)
-                    Log.d(TAG, "Connected, requesting MTU")
+                    Log.d(TAG, "Auth Connected, requesting MTU")
                     gatt.requestMtu(85) // common “max” on Android
-                }  else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                    handler.post { view.setBackgroundColor(Color.WHITE) }
+                } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                    view?.let { handler.post { it.setBackgroundColor(Color.WHITE) } }
                     if (ActivityCompat.checkSelfPermission(
                             this@MainActivity,
                             Manifest.permission.BLUETOOTH_CONNECT
@@ -362,7 +349,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
-                Log.d(TAG, "MTU changed: mtu=$mtu, status=$status")
+                Log.d(TAG, "Auth MTU changed: mtu=$mtu, status=$status")
                 if (status == BluetoothGatt.GATT_SUCCESS) {
                     gatt.discoverServices()
                 }
@@ -380,28 +367,45 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onCharacteristicRead(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
-                if (characteristic.uuid == BleManager.NONCE_UUID) {
-                    nonce = value
-                    if (ActivityCompat.checkSelfPermission(
-                            this@MainActivity,
-                            Manifest.permission.BLUETOOTH_CONNECT
-                        ) != PackageManager.PERMISSION_GRANTED
-                    ) {
-                        return
+                if (ActivityCompat.checkSelfPermission(
+                        this@MainActivity,
+                        Manifest.permission.BLUETOOTH_CONNECT
+                    ) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    return
+                }
+
+                when (characteristic.uuid) {
+                    BleManager.NONCE_UUID -> {
+                        nonce = value
+                        bleManager?.writeCharacteristic(gatt, BleManager.CLIENT_NONCE_UUID, clientNonce)
                     }
-                    bleManager?.writeCharacteristic(gatt, BleManager.CLIENT_NONCE_UUID, clientNonce)
-                } else if (characteristic.uuid == BleManager.AUTHENTICATE_ACK_UUID) {
-                    val success = value.firstOrNull() == 1.toByte()
-                    handler.post { view.setBackgroundColor(if (success) Color.GREEN else Color.RED) }
-                    handler.postDelayed({ bleManager?.createFadeAnimator(view)?.start() }, 2000)
-                    if (ActivityCompat.checkSelfPermission(
-                            this@MainActivity,
-                            Manifest.permission.BLUETOOTH_CONNECT
-                        ) != PackageManager.PERMISSION_GRANTED
-                    ) {
-                        return
+                    BleManager.AUTHENTICATE_ACK_UUID -> {
+                        val success = value.firstOrNull() == 1.toByte()
+                        Log.d(TAG, "Auth successful: $success")
+                        view?.let {
+                            handler.post { it.setBackgroundColor(if (success) Color.GREEN else Color.RED) }
+                            handler.postDelayed({ bleManager?.createFadeAnimator(it)?.start() }, 2000)
+                        }
+                        if (success && (action and 128 == 128)) {
+                            bleManager?.readCharacteristic(gatt, BleManager.PERMISSIONS_UUID)
+                        } else {
+                            bleManager?.disconnect(gatt)
+                        }
                     }
-                    bleManager?.disconnect(gatt)
+                    BleManager.PERMISSIONS_UUID -> {
+                        val permissions = value.firstOrNull()?.toInt() ?: 0
+                        if ((permissions and 0x80) == 0x80) { // is admin
+                            val intent = Intent(this@MainActivity, AdminDashboardActivity::class.java)
+                            intent.putExtra("device_address", gatt.device.address)
+                            startActivity(intent)
+                        } else {
+                            runOnUiThread {
+                                Toast.makeText(this@MainActivity, "Not an admin.", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                        bleManager?.disconnect(gatt)
+                    }
                 }
             }
 
@@ -417,28 +421,24 @@ class MainActivity : AppCompatActivity() {
                     BleManager.CLIENT_NONCE_UUID -> bleManager?.writeCharacteristic(gatt, BleManager.CLIENT_KEY_UUID, rawPublicKey)
                     BleManager.CLIENT_KEY_UUID -> {
                         val dataToSign = nonce!! + clientNonce
-//                        Log.i(TAG, "DataToSign ${nonce!!.joinToString("") { "%02x".format(it) }} ${clientNonce.joinToString("") { "%02x".format(it) }}")
-
-//                        val sha256 = MessageDigest.getInstance("SHA-256").digest(dataToSign)
-//                        Log.i(TAG, "Hash ${sha256.joinToString("") { "%02x".format(it) }}")
-
-
-//                        Log.i(TAG, "Public key ${keyPair.public.encoded.joinToString("") { "%02x".format(it) }}")
-//                        Log.i(TAG, "Raw Public key ${rawPublicKey.joinToString("") { "%02x".format(it) }}")
-//                        Log.i(TAG,"Data to sign: ${dataToSign.joinToString("") { "%02x".format(it) }}")
-
-                        var signature = Signature.getInstance( "SHA256withECDSA").apply {
+                        var signature = Signature.getInstance("SHA256withECDSA").apply {
                             initSign(keyPair.private)
                             update(dataToSign)
                         }.sign()
-
-//                        Log.i(TAG,"DER signature: ${signature.joinToString("") { "%02x".format(it) }}")
                         signature = keyManager.toRawSignature(signature)
-//                        Log.i(TAG,"Signature: ${signature.joinToString("") { "%02x".format(it) }}")
-
                         bleManager?.writeCharacteristic(gatt, BleManager.AUTHENTICATE_UUID, signature)
                     }
-                    BleManager.AUTHENTICATE_UUID -> bleManager?.readCharacteristic(gatt, BleManager.AUTHENTICATE_ACK_UUID)
+                    BleManager.AUTHENTICATE_UUID -> {
+                        if (action != 1) {
+                            bleManager?.writeCharacteristic(gatt, BleManager.ACTION_UUID, byteArrayOf(action.toByte()))
+                        } else {
+                            bleManager?.readCharacteristic(gatt, BleManager.AUTHENTICATE_ACK_UUID)
+                        }
+                    }
+                    BleManager.ACTION_UUID -> {
+                        // This is only called in management flow, after writing to ACTION
+                        bleManager?.readCharacteristic(gatt, BleManager.AUTHENTICATE_ACK_UUID)
+                    }
                 }
             }
         })
