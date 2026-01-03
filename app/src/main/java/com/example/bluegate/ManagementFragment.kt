@@ -50,12 +50,20 @@ class ManagementFragment : Fragment() {
 
     private fun addKey() {
         val keyHex = binding.keyToAddEditText.text.toString()
-        if (keyHex.length != 64) {
+        if (keyHex.length != 66) {
             Toast.makeText(context, "Invalid key length", Toast.LENGTH_SHORT).show()
             return
         }
+
         val keyBytes = keyHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-        val managementKey = byteArrayOf(0x01) + keyBytes // Assuming Ed25519 regular key
+        val isAdmin = binding.adminCheckbox.isChecked
+
+        // The first byte is the key type (0x02 or 0x03) and the rest is the 32-byte X coordinate
+        val keyType = keyBytes[0]
+        val xCoord = keyBytes.sliceArray(1..32)
+
+        val flags = if (isAdmin) (keyType.toInt() or 0x80).toByte() else keyType
+        val managementKey = byteArrayOf(flags) + xCoord
 
         if (ActivityCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return
 
@@ -69,12 +77,15 @@ class ManagementFragment : Fragment() {
 
     private fun removeKey() {
         val keyHex = binding.keyToAddEditText.text.toString()
-        if (keyHex.length != 64) {
+        if (keyHex.length != 66) {
             Toast.makeText(context, "Invalid key length", Toast.LENGTH_SHORT).show()
             return
         }
+
         val keyBytes = keyHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-        val managementKey = byteArrayOf(0x01) + keyBytes // Assuming Ed25519 regular key
+        val keyType = keyBytes[0]
+        val xCoord = keyBytes.sliceArray(1..32)
+        val managementKey = byteArrayOf(keyType) + xCoord
 
         if (ActivityCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return
 

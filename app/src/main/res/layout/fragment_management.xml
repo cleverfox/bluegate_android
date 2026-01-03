@@ -9,7 +9,13 @@
         android:id="@+id/key_to_add_edit_text"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:hint="Public Key to Add/Remove (Hex)" />
+        android:hint="Public Key to Add/Remove (Hex, 66 chars)" />
+
+    <CheckBox
+        android:id="@+id/admin_checkbox"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Set as Admin Key" />
 
     <LinearLayout
         android:layout_width="match_parent"

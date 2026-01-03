@@ -32,7 +32,7 @@ class ParametersFragment : Fragment() {
     }
 
     fun updateParameters(parameters: List<Pair<Int, Int>>) {
-        parameterAdapter.updateParameters(parameters)
+        parameterAdapter.submitList(parameters)
     }
 
     private fun setupRecyclerView() {

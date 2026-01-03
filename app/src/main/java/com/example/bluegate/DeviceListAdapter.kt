@@ -1,51 +1,29 @@
 package com.example.bluegate
 
+import android.annotation.SuppressLint
 import android.bluetooth.le.ScanResult
+import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
-import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.recyclerview.widget.DiffUtil
+import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
-import java.util.concurrent.TimeUnit
 
 class DeviceListAdapter(
-    private val onCheckClicked: (ScanResult, View) -> Unit,
+    private val onInfoClicked: (ScanResult, View) -> Unit,
     private val onOpenClicked: (ScanResult, View) -> Unit,
     private val onManageClicked: (ScanResult) -> Unit
-) : RecyclerView.Adapter<DeviceListAdapter.ViewHolder>() {
+) : ListAdapter<ScanResult, DeviceListAdapter.ViewHolder>(DeviceDiffCallback()) {
 
-    private val devices = mutableListOf<ScanResult>()
-    private val lastUpdated = mutableMapOf<String, Long>()
     private val permissions = mutableMapOf<String, Int>()
-    private val throttlePeriod = TimeUnit.SECONDS.toMillis(1)
-
-    fun addDevice(device: ScanResult) {
-        val deviceAddress = device.device.address
-        val currentTime = System.currentTimeMillis()
-
-        val existingDeviceIndex = devices.indexOfFirst { it.device.address == deviceAddress }
-
-        if (existingDeviceIndex != -1) {
-            // It's an existing device, check if we should update.
-            val lastUpdateTime = lastUpdated[deviceAddress]
-            if (lastUpdateTime == null || (currentTime - lastUpdateTime) > throttlePeriod) {
-                devices[existingDeviceIndex] = device
-                lastUpdated[deviceAddress] = currentTime
-                notifyItemChanged(existingDeviceIndex)
-            }
-        } else {
-            // It's a new device, add it.
-            devices.add(device)
-            lastUpdated[deviceAddress] = currentTime
-            notifyItemInserted(devices.size - 1)
-        }
-    }
 
     fun updatePermissions(deviceAddress: String, permissionLevel: Int) {
         permissions[deviceAddress] = permissionLevel
-        val index = devices.indexOfFirst { it.device.address == deviceAddress }
+        val index = currentList.indexOfFirst { it.device.address == deviceAddress }
         if (index != -1) {
             notifyItemChanged(index)
         }
@@ -57,35 +35,86 @@ class DeviceListAdapter(
         return ViewHolder(view)
     }
 
+    @SuppressLint("MissingPermission")
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
-        val device = devices[position]
-        holder.deviceName.text = device.device.name ?: "Unknown Device"
-        holder.deviceRssi.text = "${device.rssi} dBm"
+        val device = getItem(position)
+        holder.bind(device, permissions[device.device.address] ?: 0, onInfoClicked, onOpenClicked, onManageClicked)
+    }
 
-        val serviceUuids = device.scanRecord?.serviceUuids?.joinToString("\n") { it.uuid.toString() }
-        holder.serviceUuids.text = serviceUuids ?: "No services advertised"
-
-        holder.checkButton.setOnClickListener { onCheckClicked(device, holder.deviceContainer) }
-        holder.openButton.setOnClickListener { onOpenClicked(device, holder.deviceContainer) }
-        holder.manageButton.setOnClickListener { onManageClicked(device) }
-
-        val permissionLevel = permissions[device.device.address] ?: 0
-        if ((permissionLevel and 0x80) == 0x80) { // Admin bit is set
-            holder.manageButton.visibility = View.VISIBLE
+    @SuppressLint("MissingPermission")
+    override fun onBindViewHolder(holder: ViewHolder, position: Int, payloads: MutableList<Any>) {
+        if (payloads.isEmpty()) {
+            super.onBindViewHolder(holder, position, payloads)
         } else {
-            holder.manageButton.visibility = View.GONE
+            val device = getItem(position)
+            for (payload in payloads) {
+                if (payload is Bundle) {
+                    if (payload.containsKey("rssi")) {
+                        holder.deviceRssi.text = "${device.rssi} dBm"
+                    }
+                }
+            }
         }
     }
 
-    override fun getItemCount() = devices.size
-
     class ViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
-        val deviceContainer: FrameLayout = itemView.findViewById(R.id.device_container)
+        private val deviceInfoLayout: LinearLayout = itemView.findViewById(R.id.device_info_layout)
         val deviceName: TextView = itemView.findViewById(R.id.device_name)
         val deviceRssi: TextView = itemView.findViewById(R.id.device_rssi)
-        val serviceUuids: TextView = itemView.findViewById(R.id.service_uuids)
-        val checkButton: Button = itemView.findViewById(R.id.check_button)
-        val openButton: Button = itemView.findViewById(R.id.open_button)
-        val manageButton: Button = itemView.findViewById(R.id.manage_button)
+        private val openButton: Button = itemView.findViewById(R.id.open_button)
+        private val manageButton: Button = itemView.findViewById(R.id.manage_button)
+
+        @SuppressLint("MissingPermission")
+        fun bind(
+            device: ScanResult,
+            permissionLevel: Int,
+            onInfoClicked: (ScanResult, View) -> Unit,
+            onOpenClicked: (ScanResult, View) -> Unit,
+            onManageClicked: (ScanResult) -> Unit
+        ) {
+            deviceName.text = device.device.name ?: "Unknown Device"
+            deviceRssi.text = "${device.rssi} dBm"
+
+            deviceInfoLayout.setOnClickListener { onInfoClicked(device, itemView) }
+            openButton.setOnClickListener { onOpenClicked(device, itemView) }
+            manageButton.setOnClickListener { onManageClicked(device) }
+
+            if ((permissionLevel and 0x80) == 0x80) { // Admin bit is set
+                manageButton.visibility = View.VISIBLE
+                openButton.layoutParams = (openButton.layoutParams as LinearLayout.LayoutParams).apply {
+                    weight = 0.5f
+                }
+                manageButton.layoutParams = (manageButton.layoutParams as LinearLayout.LayoutParams).apply {
+                    weight = 0.5f
+                }
+            } else {
+                manageButton.visibility = View.GONE
+                openButton.layoutParams = (openButton.layoutParams as LinearLayout.LayoutParams).apply {
+                    weight = 1f
+                }
+            }
+        }
+    }
+}
+
+@SuppressLint("MissingPermission")
+class DeviceDiffCallback : DiffUtil.ItemCallback<ScanResult>() {
+    override fun areItemsTheSame(oldItem: ScanResult, newItem: ScanResult): Boolean {
+        return oldItem.device.address == newItem.device.address
+    }
+
+    override fun areContentsTheSame(oldItem: ScanResult, newItem: ScanResult): Boolean {
+        return oldItem.rssi == newItem.rssi && oldItem.device.name == newItem.device.name
+    }
+
+    override fun getChangePayload(oldItem: ScanResult, newItem: ScanResult): Any? {
+        val diff = Bundle()
+        if (oldItem.rssi != newItem.rssi) {
+            diff.putInt("rssi", newItem.rssi)
+        }
+        if (oldItem.device.name != newItem.device.name) {
+            diff.putString("name", newItem.device.name)
+        }
+        return if (diff.isEmpty) null else diff
     }
 }

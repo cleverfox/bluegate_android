@@ -1,6 +1,7 @@
 package com.example.bluegate
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
@@ -33,6 +34,7 @@ import java.security.KeyPair
 import java.security.KeyStore
 import java.security.Signature
 import java.security.SecureRandom
+import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
 
@@ -45,6 +47,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var keyManager : KeyManager
 
     private val handler = Handler(Looper.getMainLooper())
+    private val devices = mutableListOf<ScanResult>()
+    private val lastUpdated = mutableMapOf<String, Long>()
+    private val throttlePeriod = TimeUnit.SECONDS.toMillis(1)
 
     companion object {
         private const val TAG = "MainActivity"
@@ -53,9 +58,7 @@ class MainActivity : AppCompatActivity() {
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        if (permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true &&
-            permissions[Manifest.permission.BLUETOOTH_SCAN] == true &&
-            permissions[Manifest.permission.BLUETOOTH_CONNECT] == true) {
+        if (permissions.all { it.value }) {
             enableBluetooth()
         } else {
             Toast.makeText(this, "Permissions required for BLE scanning", Toast.LENGTH_SHORT).show()
@@ -66,8 +69,7 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == RESULT_OK) {
-            initializeBleManager()
-            startScanning()
+            onBluetoothReady()
         } else {
             Toast.makeText(this, "Bluetooth is required for this app to function", Toast.LENGTH_LONG).show()
             finish()
@@ -82,7 +84,7 @@ class MainActivity : AppCompatActivity() {
 
         setSupportActionBar(binding.toolbar)
 
-        val keyStore = KeyStore.getInstance("AndroidKeyStore")
+        val keyStore = java.security.KeyStore.getInstance("AndroidKeyStore")
         keyStore.load(null)
         keyManager = KeyManager(keyStore)
         keyPair = keyManager.getOrCreateKeyPair()
@@ -91,21 +93,18 @@ class MainActivity : AppCompatActivity() {
         rawPublicKey = keyManager.compressPublicKeyPoint(raw_key!!)
         Log.i(TAG, "My public key ${rawPublicKey.joinToString("") { "%02x".format(it) }}")
 
-        val publicKeyHex = rawPublicKey.joinToString("") { "%02x".format(it) }
-
-        val truncatedKey = "${publicKeyHex.take(4)}...${publicKeyHex.takeLast(4)}"
-
-        binding.contentMain.publicKeyText.text = "Your key: $truncatedKey"
+        updatePublicKeyDisplay()
 
         binding.contentMain.copyButton.setOnClickListener {
+            val fullPublicKeyHex = rawPublicKey.joinToString("") { "%02x".format(it) }
             val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-            val clip = ClipData.newPlainText("Public Key", publicKeyHex)
+            val clip = ClipData.newPlainText("Public Key", fullPublicKeyHex)
             clipboard.setPrimaryClip(clip)
             Toast.makeText(this, "Key copied to clipboard", Toast.LENGTH_SHORT).show()
         }
 
         deviceListAdapter = DeviceListAdapter(
-            onCheckClicked = { result, view -> handleCheck(result, view) },
+            onInfoClicked = { result, view -> handleCheck(result, view) },
             onOpenClicked = { result, view -> handleOpen(result, view) },
             onManageClicked = { result -> handleManage(result) }
         )
@@ -113,32 +112,43 @@ class MainActivity : AppCompatActivity() {
         binding.contentMain.devicesRecyclerView.layoutManager = LinearLayoutManager(this)
     }
 
+    private fun updatePublicKeyDisplay() {
+        val fullPublicKeyHex = rawPublicKey.joinToString("") { "%02x".format(it) }
+
+        val truncatedKey = if (fullPublicKeyHex.length > 12) {
+            "${fullPublicKeyHex.take(6)}...${fullPublicKeyHex.takeLast(12)}"
+        } else {
+            fullPublicKeyHex
+        }
+        binding.contentMain.publicKeyText.text = "Your key: $truncatedKey"
+    }
+
     override fun onResume() {
         super.onResume()
-        if (ActivityCompat.checkSelfPermission(
-                this,
-                Manifest.permission.ACCESS_FINE_LOCATION
-            ) != PackageManager.PERMISSION_GRANTED || ActivityCompat.checkSelfPermission(
-                this,
-                Manifest.permission.BLUETOOTH_SCAN
-            ) != PackageManager.PERMISSION_GRANTED || ActivityCompat.checkSelfPermission(
-                this,
+        checkPermissions()
+    }
+
+    private fun checkPermissions() {
+        val requiredPermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.BLUETOOTH_SCAN,
                 Manifest.permission.BLUETOOTH_CONNECT
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                requestPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT))
-            } else {
-                requestPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION))
-            }
+            )
         } else {
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.BLUETOOTH_ADMIN)
+        }
+
+        if (requiredPermissions.all { ActivityCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }) {
             enableBluetooth()
+        } else {
+            requestPermissionLauncher.launch(requiredPermissions)
         }
     }
 
     override fun onPause() {
         super.onPause()
-        if (ActivityCompat.checkSelfPermission(
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && ActivityCompat.checkSelfPermission(
                 this,
                 Manifest.permission.BLUETOOTH_SCAN
             ) != PackageManager.PERMISSION_GRANTED
@@ -148,6 +158,7 @@ class MainActivity : AppCompatActivity() {
         bleManager?.stopScanning(scanCallback)
     }
 
+    @SuppressLint("MissingPermission")
     private fun enableBluetooth() {
         val bluetoothManager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
         val bluetoothAdapter = bluetoothManager.adapter
@@ -158,77 +169,71 @@ class MainActivity : AppCompatActivity() {
         }
         if (!bluetoothAdapter.isEnabled) {
             val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
-            if (ActivityCompat.checkSelfPermission(
-                    this,
-                    Manifest.permission.BLUETOOTH_CONNECT
-                ) != PackageManager.PERMISSION_GRANTED
-            ) {
-                return
-            }
             enableBluetoothLauncher.launch(enableBtIntent)
         } else {
-            initializeBleManager()
-            startScanning()
+            onBluetoothReady()
         }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun onBluetoothReady() {
+//        val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+        updatePublicKeyDisplay()
+        initializeBleManager()
+        startScanning()
     }
 
     private fun initializeBleManager() {
         val bluetoothManager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
-        val bluetoothAdapter = bluetoothManager.adapter
-        if (bluetoothAdapter != null && bluetoothAdapter.isEnabled) {
-            bleManager = BleManager(this, bluetoothAdapter)
-        }
+        bleManager = BleManager(this, bluetoothManager.adapter)
     }
 
+    @SuppressLint("MissingPermission")
     private fun startScanning() {
-        if (ActivityCompat.checkSelfPermission(
-                this,
-                Manifest.permission.BLUETOOTH_SCAN
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            return
-        }
+        devices.clear()
+        deviceListAdapter.submitList(devices.toList())
         bleManager?.startScanning(scanCallback)
     }
 
     private val scanCallback = object : ScanCallback() {
+        @SuppressLint("MissingPermission")
         override fun onScanResult(callbackType: Int, result: ScanResult) {
-            runOnUiThread { deviceListAdapter.addDevice(result) }
+            val deviceAddress = result.device.address
+            val currentTime = System.currentTimeMillis()
+
+            val existingDeviceIndex = devices.indexOfFirst { it.device.address == deviceAddress }
+
+            if (existingDeviceIndex != -1) {
+                val lastUpdateTime = lastUpdated[deviceAddress]
+                if (lastUpdateTime == null || (currentTime - lastUpdateTime) > throttlePeriod) {
+                    devices[existingDeviceIndex] = result
+                    lastUpdated[deviceAddress] = currentTime
+                    val payload = Bundle().apply { putInt("rssi", result.rssi) }
+                    deviceListAdapter.notifyItemChanged(existingDeviceIndex, payload)
+                }
+            } else {
+                devices.add(result)
+                lastUpdated[deviceAddress] = currentTime
+                deviceListAdapter.submitList(devices.toList())
+            }
         }
     }
 
     private fun handleManage(result: ScanResult) {
-        authenticate(result.device, null, 128)
+        authenticate(result.device, null, isForManagement = true)
     }
 
+    @SuppressLint("MissingPermission")
     private fun handleCheck(result: ScanResult, view: View) {
         Log.d(TAG, "handleCheck: starting for device ${result.device.address}")
-        if (ActivityCompat.checkSelfPermission(
-                this,
-                Manifest.permission.BLUETOOTH_CONNECT
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            return
-        }
         bleManager?.connect(result.device, object : BluetoothGattCallback() {
             @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
             override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
                 if (status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothProfile.STATE_CONNECTED) {
                     Log.d(TAG, "Connected, requesting MTU")
                     gatt.requestMtu(85) // common “max” on Android
-                } else {
-                    Log.e(TAG, "Connection state change: status=$status, newState=$newState")
-                }
-
-                if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                     handler.post { view.setBackgroundColor(Color.WHITE) }
-                    if (ActivityCompat.checkSelfPermission(
-                            this@MainActivity,
-                            Manifest.permission.BLUETOOTH_CONNECT
-                        ) != PackageManager.PERMISSION_GRANTED
-                    ) {
-                        return
-                    }
                     bleManager?.disconnect(gatt)
                 }
             }
@@ -242,88 +247,50 @@ class MainActivity : AppCompatActivity() {
 
             override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
                 Log.d(TAG, "onServicesDiscovered: status $status")
-                if (ActivityCompat.checkSelfPermission(
-                        this@MainActivity,
-                        Manifest.permission.BLUETOOTH_CONNECT
-                    ) != PackageManager.PERMISSION_GRANTED
-                ) {
-                    return
-                }
                 bleManager?.writeCharacteristic(gatt, BleManager.CLIENT_KEY_UUID, rawPublicKey)
             }
 
             override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
                 Log.d(TAG, "onCharacteristicWrite: uuid ${characteristic.uuid}, status $status")
                 if (characteristic.uuid == BleManager.CLIENT_KEY_UUID) {
-                    if (ActivityCompat.checkSelfPermission(
-                            this@MainActivity,
-                            Manifest.permission.BLUETOOTH_CONNECT
-                        ) != PackageManager.PERMISSION_GRANTED
-                    ) {
-                        return
-                    }
                     bleManager?.readCharacteristic(gatt, BleManager.CLIENT_KEY_ACK_UUID)
                 }
             }
 
             override fun onCharacteristicRead(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
                 Log.d(TAG, "onCharacteristicRead: uuid ${characteristic.uuid}, status $status, value ${value.joinToString()}")
-                if (characteristic.uuid == BleManager.CLIENT_KEY_ACK_UUID) {
-                    val success = value.firstOrNull() == 1.toByte()
-                    Log.d(TAG, "onCharacteristicRead: CLIENT_KEY_ACK_UUID success: $success")
-                    handler.post { view.setBackgroundColor(if (success) Color.GREEN else Color.RED) }
-                    if (success) {
-                        if (ActivityCompat.checkSelfPermission(
-                                this@MainActivity,
-                                Manifest.permission.BLUETOOTH_CONNECT
-                            ) != PackageManager.PERMISSION_GRANTED
-                        ) {
-                            return
+                when (characteristic.uuid) {
+                    BleManager.CLIENT_KEY_ACK_UUID -> {
+                        val success = value.firstOrNull() == 1.toByte()
+                        Log.d(TAG, "onCharacteristicRead: CLIENT_KEY_ACK_UUID success: $success")
+                        handler.post { view.setBackgroundColor(if (success) Color.GREEN else Color.RED) }
+                        if (success) {
+                            bleManager?.readCharacteristic(gatt, BleManager.PERMISSIONS_UUID)
+                        } else {
+                            handler.postDelayed({ bleManager?.createFadeAnimator(view)?.start() }, 2000)
+                            bleManager?.disconnect(gatt)
                         }
-                        bleManager?.readCharacteristic(gatt, BleManager.PERMISSIONS_UUID)
-                    } else {
+                    }
+                    BleManager.PERMISSIONS_UUID -> {
+                        val permissionLevel = value.firstOrNull()?.toInt() ?: 0
+                        runOnUiThread {
+                            deviceListAdapter.updatePermissions(gatt.device.address, permissionLevel)
+                        }
                         handler.postDelayed({ bleManager?.createFadeAnimator(view)?.start() }, 2000)
-                        if (ActivityCompat.checkSelfPermission(
-                                this@MainActivity,
-                                Manifest.permission.BLUETOOTH_CONNECT
-                            ) != PackageManager.PERMISSION_GRANTED
-                        ) {
-                            return
-                        }
                         bleManager?.disconnect(gatt)
                     }
-                } else if (characteristic.uuid == BleManager.PERMISSIONS_UUID) {
-                    val permissionLevel = value.firstOrNull()?.toInt() ?: 0
-                    runOnUiThread {
-                        deviceListAdapter.updatePermissions(gatt.device.address, permissionLevel)
-                    }
-                    handler.postDelayed({ bleManager?.createFadeAnimator(view)?.start() }, 2000)
-                    if (ActivityCompat.checkSelfPermission(
-                            this@MainActivity,
-                            Manifest.permission.BLUETOOTH_CONNECT
-                        ) != PackageManager.PERMISSION_GRANTED
-                    ) {
-                        return
-                    }
-                    bleManager?.disconnect(gatt)
                 }
             }
         })
     }
 
     private fun handleOpen(result: ScanResult, view: View) {
-        authenticate(result.device, view, 1)
+        authenticate(result.device, view, isForManagement = false)
     }
 
-    private fun authenticate(device: BluetoothDevice, view: View?, action: Int) {
-        Log.d(TAG, "Authenticating for device ${device.address}, action: $action")
-        if (ActivityCompat.checkSelfPermission(
-                this,
-                Manifest.permission.BLUETOOTH_CONNECT
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            return
-        }
+    @SuppressLint("MissingPermission")
+    private fun authenticate(device: BluetoothDevice, view: View?, isForManagement: Boolean) {
+        Log.d(TAG, "Authenticating for device ${device.address}, isForManagement: $isForManagement")
         bleManager?.connect(device, object : BluetoothGattCallback() {
             var nonce: ByteArray? = null
 
@@ -337,13 +304,6 @@ class MainActivity : AppCompatActivity() {
                     gatt.requestMtu(85) // common “max” on Android
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                     view?.let { handler.post { it.setBackgroundColor(Color.WHITE) } }
-                    if (ActivityCompat.checkSelfPermission(
-                            this@MainActivity,
-                            Manifest.permission.BLUETOOTH_CONNECT
-                        ) != PackageManager.PERMISSION_GRANTED
-                    ) {
-                        return
-                    }
                     bleManager?.disconnect(gatt)
                 }
             }
@@ -356,29 +316,14 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-                if (ActivityCompat.checkSelfPermission(
-                        this@MainActivity,
-                        Manifest.permission.BLUETOOTH_CONNECT
-                    ) != PackageManager.PERMISSION_GRANTED
-                ) {
-                    return
-                }
                 bleManager?.readCharacteristic(gatt, BleManager.NONCE_UUID)
             }
 
             override fun onCharacteristicRead(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
-                if (ActivityCompat.checkSelfPermission(
-                        this@MainActivity,
-                        Manifest.permission.BLUETOOTH_CONNECT
-                    ) != PackageManager.PERMISSION_GRANTED
-                ) {
-                    return
-                }
-
                 when (characteristic.uuid) {
                     BleManager.NONCE_UUID -> {
                         nonce = value
-                        bleManager?.writeCharacteristic(gatt, BleManager.CLIENT_NONCE_UUID, clientNonce)
+                        bleManager?.writeCharacteristic(gatt, BleManager.CLIENT_KEY_UUID, rawPublicKey)
                     }
                     BleManager.AUTHENTICATE_ACK_UUID -> {
                         val success = value.firstOrNull() == 1.toByte()
@@ -387,7 +332,7 @@ class MainActivity : AppCompatActivity() {
                             handler.post { it.setBackgroundColor(if (success) Color.GREEN else Color.RED) }
                             handler.postDelayed({ bleManager?.createFadeAnimator(it)?.start() }, 2000)
                         }
-                        if (success && (action and 128 == 128)) {
+                        if (success && isForManagement) {
                             bleManager?.readCharacteristic(gatt, BleManager.PERMISSIONS_UUID)
                         } else {
                             bleManager?.disconnect(gatt)
@@ -410,16 +355,9 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
-                if (ActivityCompat.checkSelfPermission(
-                        this@MainActivity,
-                        Manifest.permission.BLUETOOTH_CONNECT
-                    ) != PackageManager.PERMISSION_GRANTED
-                ) {
-                    return
-                }
                 when (characteristic.uuid) {
-                    BleManager.CLIENT_NONCE_UUID -> bleManager?.writeCharacteristic(gatt, BleManager.CLIENT_KEY_UUID, rawPublicKey)
-                    BleManager.CLIENT_KEY_UUID -> {
+                    BleManager.CLIENT_KEY_UUID -> bleManager?.writeCharacteristic(gatt, BleManager.CLIENT_NONCE_UUID, clientNonce)
+                    BleManager.CLIENT_NONCE_UUID -> {
                         val dataToSign = nonce!! + clientNonce
                         var signature = Signature.getInstance("SHA256withECDSA").apply {
                             initSign(keyPair.private)
@@ -429,14 +367,13 @@ class MainActivity : AppCompatActivity() {
                         bleManager?.writeCharacteristic(gatt, BleManager.AUTHENTICATE_UUID, signature)
                     }
                     BleManager.AUTHENTICATE_UUID -> {
-                        if (action != 1) {
-                            bleManager?.writeCharacteristic(gatt, BleManager.ACTION_UUID, byteArrayOf(action.toByte()))
+                        if (isForManagement) {
+                            bleManager?.writeCharacteristic(gatt, BleManager.ACTION_UUID, byteArrayOf(128.toByte()))
                         } else {
                             bleManager?.readCharacteristic(gatt, BleManager.AUTHENTICATE_ACK_UUID)
                         }
                     }
                     BleManager.ACTION_UUID -> {
-                        // This is only called in management flow, after writing to ACTION
                         bleManager?.readCharacteristic(gatt, BleManager.AUTHENTICATE_ACK_UUID)
                     }
                 }
