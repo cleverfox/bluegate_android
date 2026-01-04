@@ -41,6 +41,17 @@ class ManagementFragment : Fragment() {
             binding.configValueEditText.setText(value.toString())
         }
 
+        sharedViewModel.selectedKeyHex.observe(viewLifecycleOwner) { keyHex ->
+            binding.keyToAddEditText.setText(keyHex)
+            if (keyHex.length >= 2) {
+                val firstByte = keyHex.take(2).toInt(16)
+                binding.adminCheckbox.isChecked = (firstByte and 0x80) != 0
+                binding.admAdminCheckbox.isChecked = (firstByte and 0x40) != 0
+                binding.setAdminCheckbox.isChecked = (firstByte and 0x20) != 0
+                binding.manualDoorsCheckbox.isChecked = (firstByte and 0x04) != 0
+            }
+        }
+
         binding.addKeyButton.setOnClickListener { addKey() }
         binding.removeKeyButton.setOnClickListener { removeKey() }
         binding.setConfigButton.setOnClickListener { setConfig() }
@@ -57,13 +68,20 @@ class ManagementFragment : Fragment() {
 
         val keyBytes = keyHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
         val isAdmin = binding.adminCheckbox.isChecked
+        val isAdmAdmin = binding.admAdminCheckbox.isChecked
+        val isSetAdmin = binding.setAdminCheckbox.isChecked
+        val isManualDoors = binding.manualDoorsCheckbox.isChecked
 
         // The first byte is the key type (0x02 or 0x03) and the rest is the 32-byte X coordinate
-        val keyType = keyBytes[0]
+        val keyType = (keyBytes[0].toInt() and 0x03).toByte()
         val xCoord = keyBytes.sliceArray(1..32)
 
-        val flags = if (isAdmin) (keyType.toInt() or 0x80).toByte() else keyType
-        val managementKey = byteArrayOf(flags) + xCoord
+        var flags = keyType.toInt()
+        if (isAdmin) flags = flags or 0x80
+        if (isAdmAdmin) flags = flags or 0x40
+        if (isSetAdmin) flags = flags or 0x20
+        if (isManualDoors) flags = flags or 0x04
+        val managementKey = byteArrayOf(flags.toByte()) + xCoord
 
         if (ActivityCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return
 
@@ -83,9 +101,18 @@ class ManagementFragment : Fragment() {
         }
 
         val keyBytes = keyHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-        val keyType = keyBytes[0]
+        val isAdmin = binding.adminCheckbox.isChecked
+        val isAdmAdmin = binding.admAdminCheckbox.isChecked
+        val isSetAdmin = binding.setAdminCheckbox.isChecked
+        val isManualDoors = binding.manualDoorsCheckbox.isChecked
+        val keyType = (keyBytes[0].toInt() and 0x03).toByte()
         val xCoord = keyBytes.sliceArray(1..32)
-        val managementKey = byteArrayOf(keyType) + xCoord
+        var flags = keyType.toInt()
+        if (isAdmin) flags = flags or 0x80
+        if (isAdmAdmin) flags = flags or 0x40
+        if (isSetAdmin) flags = flags or 0x20
+        if (isManualDoors) flags = flags or 0x04
+        val managementKey = byteArrayOf(flags.toByte()) + xCoord
 
         if (ActivityCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return
 

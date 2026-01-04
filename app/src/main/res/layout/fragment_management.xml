@@ -15,7 +15,25 @@
         android:id="@+id/admin_checkbox"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Set as Admin Key" />
+        android:text="Admin" />
+
+    <CheckBox
+        android:id="@+id/adm_admin_checkbox"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="AdmAdmin" />
+
+    <CheckBox
+        android:id="@+id/set_admin_checkbox"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="SetAdmin" />
+
+    <CheckBox
+        android:id="@+id/manual_doors_checkbox"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="ManualDoors" />
 
     <LinearLayout
         android:layout_width="match_parent"

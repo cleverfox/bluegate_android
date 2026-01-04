@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:id="@+id/key_value"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textIsSelectable="false"
+        tools:text="02aabbccddeeff00112233445566778899aabbccddeeff0011223344556677" />
+
+    <TextView
+        android:id="@+id/key_admin"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        tools:text="Admin: true" />
+</LinearLayout>

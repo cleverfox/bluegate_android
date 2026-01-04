@@ -45,9 +45,27 @@ class AdminDashboardActivity : AppCompatActivity() {
     private var isOperationInProgress = false
 
     private val parameters = mutableListOf<Pair<Int, Int>>()
+    private val keys = mutableListOf<KeyInfo>()
+    private val logs = mutableListOf<LogEntry>()
     private val sharedViewModel: SharedViewModel by viewModels()
+    private var expectedKeyCount = 0
+    private var currentKeyIndex = 0
+    private var expectedLogCount = 0
+    private var currentLogIndex = 0
 
-    enum class BleOperationContext { NONE, GET_SINGLE_CONFIG, GET_ALL_CONFIGS, SET_CONFIG, GET_NAME, SET_NAME, ADD_KEY, REMOVE_KEY, MANUAL_CONTROL }
+    enum class BleOperationContext {
+        NONE,
+        GET_SINGLE_CONFIG,
+        GET_ALL_CONFIGS,
+        SET_CONFIG,
+        GET_NAME,
+        SET_NAME,
+        ADD_KEY,
+        REMOVE_KEY,
+        MANUAL_CONTROL,
+        GET_ALL_KEYS,
+        GET_LOGS
+    }
     var currentOperationContext = BleOperationContext.NONE
 
     companion object {
@@ -88,14 +106,18 @@ class AdminDashboardActivity : AppCompatActivity() {
                 0 -> "Manage"
                 1 -> "Parameters"
                 2 -> "Manual"
+                3 -> "Keys"
+                4 -> "Logs"
                 else -> null
             }
         }.attach()
 
         tabLayout.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
             override fun onTabSelected(tab: TabLayout.Tab?) {
-                if (tab?.position == 1) {
-                    readAllParameters()
+                when (tab?.position) {
+                    1 -> readAllParameters()
+                    3 -> readAllKeys()
+                    4 -> readAllLogs()
                 }
             }
 
@@ -168,6 +190,40 @@ class AdminDashboardActivity : AppCompatActivity() {
         }
     }
 
+    private fun readAllKeys() {
+        keys.clear()
+        expectedKeyCount = 0
+        currentKeyIndex = 0
+        currentOperationContext = BleOperationContext.GET_ALL_KEYS
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            return
+        }
+        bluetoothGatt?.let { gatt ->
+            queueOperation {
+                val indexBytes = ByteBuffer.allocate(4)
+                    .order(ByteOrder.LITTLE_ENDIAN)
+                    .putInt(currentKeyIndex)
+                    .array()
+                bleManager?.writeCharacteristic(gatt, BleManager.MANAGEMENT_PARAM_VAL_UUID, indexBytes)
+            }
+            queueOperation { bleManager?.writeCharacteristic(gatt, BleManager.MANAGEMENT_ACTION_UUID, byteArrayOf(0x03)) }
+            queueOperation { bleManager?.readCharacteristic(gatt, BleManager.MANAGEMENT_RESULT_UUID) }
+        }
+    }
+
+    private fun readAllLogs() {
+        logs.clear()
+        expectedLogCount = 0
+        currentLogIndex = 0
+        currentOperationContext = BleOperationContext.GET_LOGS
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            return
+        }
+        bluetoothGatt?.let { gatt ->
+            queueOperation { bleManager?.readCharacteristic(gatt, BleManager.LOG_COUNT_UUID) }
+        }
+    }
+
     fun manualControl(actionId: Int) {
         currentOperationContext = BleOperationContext.MANUAL_CONTROL
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
@@ -188,6 +244,11 @@ class AdminDashboardActivity : AppCompatActivity() {
             ?: return
         val authenticator = Authenticator(this, bleManager, keyPair, rawPublicKey, keyManager, handler)
         authenticator.authenticate(device, null, action, onAuthResult = onAuthResult)
+    }
+
+    fun selectKeyForManagement(keyHex: String) {
+        binding.viewPager.currentItem = 0
+        sharedViewModel.selectKeyHex(keyHex)
     }
 
     private val gattCallback = object : BluetoothGattCallback() {
@@ -252,8 +313,26 @@ class AdminDashboardActivity : AppCompatActivity() {
                 when (characteristic.uuid) {
                     BleManager.MANAGEMENT_RESULT_UUID -> {
                         val result = value.firstOrNull()?.toInt() ?: -1
-                        runOnUiThread {
-                            Toast.makeText(this@AdminDashboardActivity, "Management operation result: $result", Toast.LENGTH_SHORT).show()
+                        if (currentOperationContext == BleOperationContext.GET_ALL_KEYS) {
+                            when (result) {
+                                0x00 -> {
+                                    queueOperation { bleManager?.readCharacteristic(gatt, BleManager.MANAGEMENT_PARAM_VAL_UUID) }
+                                    queueOperation { bleManager?.readCharacteristic(gatt, BleManager.MANAGEMENT_KEY_UUID) }
+                                }
+                                0x03 -> {
+                                    currentOperationContext = BleOperationContext.NONE
+                                }
+                                else -> {
+                                    currentOperationContext = BleOperationContext.NONE
+                                    runOnUiThread {
+                                        Toast.makeText(this@AdminDashboardActivity, "Key read error: $result", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        } else {
+                            runOnUiThread {
+                                Toast.makeText(this@AdminDashboardActivity, "Management operation result: $result", Toast.LENGTH_SHORT).show()
+                            }
                         }
                     }
                     BleManager.MANAGEMENT_PARAM_VAL_UUID -> {
@@ -281,7 +360,42 @@ class AdminDashboardActivity : AppCompatActivity() {
                                     currentOperationContext = BleOperationContext.NONE
                                 }
                             }
+                            BleOperationContext.GET_ALL_KEYS -> {
+                                expectedKeyCount = configValue
+                            }
                             else -> {}
+                        }
+                    }
+                    BleManager.MANAGEMENT_KEY_UUID -> {
+                        if (currentOperationContext == BleOperationContext.GET_ALL_KEYS) {
+                            if (value.size == 33) {
+                                val flags = value[0].toInt() and 0xFF
+                                val keyType = flags and 0x03
+                                val isAdmin = (flags and 0x80) != 0
+                                val keyHex = value.joinToString("") { "%02x".format(it) }
+                                val typeLabel = if (keyType == 1) "ed25519" else "secp256r1"
+                                keys.add(KeyInfo(keyHex, typeLabel, isAdmin))
+                                val keysFragment = supportFragmentManager.findFragmentByTag("f3") as? KeysFragment
+                                keysFragment?.let {
+                                    runOnUiThread {
+                                        it.updateKeys(ArrayList(keys))
+                                    }
+                                }
+                            }
+                            currentKeyIndex += 1
+                            if (currentKeyIndex < expectedKeyCount) {
+                                queueOperation {
+                                    val indexBytes = ByteBuffer.allocate(4)
+                                        .order(ByteOrder.LITTLE_ENDIAN)
+                                        .putInt(currentKeyIndex)
+                                        .array()
+                                    bleManager?.writeCharacteristic(gatt, BleManager.MANAGEMENT_PARAM_VAL_UUID, indexBytes)
+                                }
+                                queueOperation { bleManager?.writeCharacteristic(gatt, BleManager.MANAGEMENT_ACTION_UUID, byteArrayOf(0x03)) }
+                                queueOperation { bleManager?.readCharacteristic(gatt, BleManager.MANAGEMENT_RESULT_UUID) }
+                            } else {
+                                currentOperationContext = BleOperationContext.NONE
+                            }
                         }
                     }
                     BleManager.MANAGEMENT_NAME_UUID -> {
@@ -291,6 +405,71 @@ class AdminDashboardActivity : AppCompatActivity() {
                         mgmtFragment?.let {
                             runOnUiThread {
                                 it.binding.deviceNameEditText.setText(deviceName)
+                            }
+                        }
+                    }
+                    BleManager.LOG_COUNT_UUID -> {
+                        if (currentOperationContext == BleOperationContext.GET_LOGS) {
+                            if (value.size >= 2) {
+                                expectedLogCount = ByteBuffer.wrap(value).order(ByteOrder.LITTLE_ENDIAN).short.toInt() and 0xFFFF
+                            }
+                            if (expectedLogCount == 0) {
+                                val logsFragment = supportFragmentManager.findFragmentByTag("f4") as? LogsFragment
+                                logsFragment?.let {
+                                    runOnUiThread { it.updateLogs(ArrayList(logs)) }
+                                }
+                                currentOperationContext = BleOperationContext.NONE
+                            } else {
+                                queueOperation {
+                                    val indexBytes = ByteBuffer.allocate(2)
+                                        .order(ByteOrder.LITTLE_ENDIAN)
+                                        .putShort(currentLogIndex.toShort())
+                                        .array()
+                                    bleManager?.writeCharacteristic(gatt, BleManager.LOG_INDEX_UUID, indexBytes)
+                                }
+                                queueOperation { bleManager?.readCharacteristic(gatt, BleManager.LOG_ENTRY_UUID) }
+                            }
+                        }
+                    }
+                    BleManager.LOG_ENTRY_UUID -> {
+                        if (currentOperationContext == BleOperationContext.GET_LOGS) {
+                            if (value.size >= 50) {
+                                val flags = value[0].toInt() and 0xFF
+                                if ((flags and 0x01) != 0) {
+                                    val pubkey = value.sliceArray(1..33).joinToString("") { "%02x".format(it) }
+                                    val uptimeMs = ByteBuffer.wrap(value, 34, 8).order(ByteOrder.LITTLE_ENDIAN).long
+                                    val addrBytes = value.sliceArray(42..47)
+                                    val authAction = ByteBuffer.wrap(value, 48, 2).order(ByteOrder.LITTLE_ENDIAN).short.toInt() and 0xFFFF
+                                    val addr = addrBytes.joinToString(":") { "%02x".format(it) }
+                                    val success = (flags and 0x02) != 0
+                                    logs.add(
+                                        LogEntry(
+                                            index = currentLogIndex,
+                                            pubkey = pubkey,
+                                            addr = addr,
+                                            uptimeMs = uptimeMs,
+                                            authAction = authAction,
+                                            success = success
+                                        )
+                                    )
+                                    val logsFragment = supportFragmentManager.findFragmentByTag("f4") as? LogsFragment
+                                    logsFragment?.let {
+                                        runOnUiThread { it.updateLogs(ArrayList(logs)) }
+                                    }
+                                }
+                            }
+                            currentLogIndex += 1
+                            if (currentLogIndex < expectedLogCount) {
+                                queueOperation {
+                                    val indexBytes = ByteBuffer.allocate(2)
+                                        .order(ByteOrder.LITTLE_ENDIAN)
+                                        .putShort(currentLogIndex.toShort())
+                                        .array()
+                                    bleManager?.writeCharacteristic(gatt, BleManager.LOG_INDEX_UUID, indexBytes)
+                                }
+                                queueOperation { bleManager?.readCharacteristic(gatt, BleManager.LOG_ENTRY_UUID) }
+                            } else {
+                                currentOperationContext = BleOperationContext.NONE
                             }
                         }
                     }

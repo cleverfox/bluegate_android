@@ -52,6 +52,11 @@ class BleManager(private val context: Context, val bluetoothAdapter: BluetoothAd
         val MANAGEMENT_PARAM_VAL_UUID: UUID = UUID.fromString("00001103-0000-1000-8000-00805F9B34FB")
         val MANAGEMENT_NAME_UUID: UUID = UUID.fromString("00001104-0000-1000-8000-00805F9B34FB")
         val MANAGEMENT_RESULT_UUID: UUID = UUID.fromString("00001105-0000-1000-8000-00805F9B34FB")
+
+        // Auth log characteristics
+        val LOG_INDEX_UUID: UUID = UUID.fromString("00001200-0000-1000-8000-00805F9B34FB")
+        val LOG_ENTRY_UUID: UUID = UUID.fromString("00001201-0000-1000-8000-00805F9B34FB")
+        val LOG_COUNT_UUID: UUID = UUID.fromString("00001202-0000-1000-8000-00805F9B34FB")
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_SCAN)
