@@ -220,7 +220,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleManage(result: ScanResult) {
-        authenticate(result.device, null, isForManagement = true)
+        authenticate(result.device, null, 0x80)
     }
 
     @SuppressLint("MissingPermission")
@@ -285,12 +285,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleOpen(result: ScanResult, view: View) {
-        authenticate(result.device, view, isForManagement = false)
+        authenticate(result.device, view, 0x01)
     }
 
     @SuppressLint("MissingPermission")
-    private fun authenticate(device: BluetoothDevice, view: View?, isForManagement: Boolean) {
-        Log.d(TAG, "Authenticating for device ${device.address}, isForManagement: $isForManagement")
+    private fun authenticate(device: BluetoothDevice, view: View?, action: Int) {
+        Log.d(TAG, "Authenticating for device ${device.address}, action: $action")
         bleManager?.connect(device, object : BluetoothGattCallback() {
             var nonce: ByteArray? = null
 
@@ -316,7 +316,11 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-                bleManager?.readCharacteristic(gatt, BleManager.NONCE_UUID)
+                if (action == 0x01) {
+                    bleManager?.readCharacteristic(gatt, BleManager.NONCE_UUID)
+                }else{
+                    bleManager?.writeCharacteristic(gatt, BleManager.ACTION_UUID, byteArrayOf(action.toByte()))
+                }
             }
 
             override fun onCharacteristicRead(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
@@ -332,7 +336,7 @@ class MainActivity : AppCompatActivity() {
                             handler.post { it.setBackgroundColor(if (success) Color.GREEN else Color.RED) }
                             handler.postDelayed({ bleManager?.createFadeAnimator(it)?.start() }, 2000)
                         }
-                        if (success && isForManagement) {
+                        if (success && (action and 0x80 == 0x80 )) {
                             bleManager?.readCharacteristic(gatt, BleManager.PERMISSIONS_UUID)
                         } else {
                             bleManager?.disconnect(gatt)
@@ -356,6 +360,7 @@ class MainActivity : AppCompatActivity() {
 
             override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
                 when (characteristic.uuid) {
+                    BleManager.ACTION_UUID -> bleManager?.readCharacteristic(gatt, BleManager.NONCE_UUID)
                     BleManager.CLIENT_KEY_UUID -> bleManager?.writeCharacteristic(gatt, BleManager.CLIENT_NONCE_UUID, clientNonce)
                     BleManager.CLIENT_NONCE_UUID -> {
                         val dataToSign = nonce!! + clientNonce
@@ -367,11 +372,7 @@ class MainActivity : AppCompatActivity() {
                         bleManager?.writeCharacteristic(gatt, BleManager.AUTHENTICATE_UUID, signature)
                     }
                     BleManager.AUTHENTICATE_UUID -> {
-                        if (isForManagement) {
-                            bleManager?.writeCharacteristic(gatt, BleManager.ACTION_UUID, byteArrayOf(128.toByte()))
-                        } else {
-                            bleManager?.readCharacteristic(gatt, BleManager.AUTHENTICATE_ACK_UUID)
-                        }
+                        bleManager?.readCharacteristic(gatt, BleManager.AUTHENTICATE_ACK_UUID)
                     }
                     BleManager.ACTION_UUID -> {
                         bleManager?.readCharacteristic(gatt, BleManager.AUTHENTICATE_ACK_UUID)

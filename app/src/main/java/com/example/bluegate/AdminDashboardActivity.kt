@@ -8,6 +8,7 @@ import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
@@ -20,6 +21,10 @@ import com.google.android.material.tabs.TabLayout
 import com.google.android.material.tabs.TabLayoutMediator
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.security.KeyPair
+import java.security.KeyStore
+import java.security.SecureRandom
+import java.security.Signature
 import java.util.ArrayDeque
 
 class AdminDashboardActivity : AppCompatActivity() {
@@ -28,6 +33,10 @@ class AdminDashboardActivity : AppCompatActivity() {
     var bleManager: BleManager? = null
     var bluetoothGatt: BluetoothGatt? = null
     private var deviceAddress: String? = null
+    private lateinit var keyPair: KeyPair
+    private lateinit var rawPublicKey: ByteArray
+    private lateinit var clientNonce: ByteArray
+    private lateinit var keyManager: KeyManager
 
     // Queue for sequential BLE operations
     private val operationQueue = ArrayDeque<Runnable>()
@@ -36,7 +45,7 @@ class AdminDashboardActivity : AppCompatActivity() {
     private val parameters = mutableListOf<Pair<Int, Int>>()
     private val sharedViewModel: SharedViewModel by viewModels()
 
-    enum class BleOperationContext { NONE, GET_SINGLE_CONFIG, GET_ALL_CONFIGS, SET_CONFIG, GET_NAME, SET_NAME, ADD_KEY, REMOVE_KEY }
+    enum class BleOperationContext { NONE, GET_SINGLE_CONFIG, GET_ALL_CONFIGS, SET_CONFIG, GET_NAME, SET_NAME, ADD_KEY, REMOVE_KEY, MANUAL_CONTROL }
     var currentOperationContext = BleOperationContext.NONE
 
     companion object {
@@ -58,6 +67,14 @@ class AdminDashboardActivity : AppCompatActivity() {
         val bluetoothManager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
         bleManager = BleManager(this, bluetoothManager.adapter)
 
+        val keyStore = KeyStore.getInstance("AndroidKeyStore")
+        keyStore.load(null)
+        keyManager = KeyManager(keyStore)
+        keyPair = keyManager.getOrCreateKeyPair()
+
+        val raw_key = keyManager.extractUncompressedECPoint(keyPair.public.encoded)
+        rawPublicKey = keyManager.compressPublicKeyPoint(raw_key!!)
+
         val viewPager: ViewPager2 = binding.viewPager
         val tabLayout: TabLayout = binding.tabLayout
 
@@ -68,6 +85,7 @@ class AdminDashboardActivity : AppCompatActivity() {
             tab.text = when (position) {
                 0 -> "Manage"
                 1 -> "Parameters"
+                2 -> "Manual"
                 else -> null
             }
         }.attach()
@@ -148,7 +166,20 @@ class AdminDashboardActivity : AppCompatActivity() {
         }
     }
 
+    fun manualControl(actionId: Int) {
+        currentOperationContext = BleOperationContext.MANUAL_CONTROL
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            return
+        }
+        bluetoothGatt?.let { gatt ->
+            queueOperation { bleManager?.writeCharacteristic(gatt, BleManager.ACTION_UUID, byteArrayOf(actionId.toByte())) }
+            queueOperation { bleManager?.readCharacteristic(gatt, BleManager.NONCE_UUID) }
+        }
+    }
+
     private val gattCallback = object : BluetoothGattCallback() {
+        var nonce: ByteArray? = null
+
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 Log.d(TAG, "Connected to GATT server.")
@@ -180,8 +211,25 @@ class AdminDashboardActivity : AppCompatActivity() {
                 Log.e(TAG, "Write failed for ${characteristic.uuid}")
                 operationQueue.clear()
             }
-            isOperationInProgress = false
-            processOperationQueue()
+
+            if (currentOperationContext == BleOperationContext.MANUAL_CONTROL) {
+                when (characteristic.uuid) {
+                    BleManager.CLIENT_KEY_UUID -> bleManager?.writeCharacteristic(gatt, BleManager.CLIENT_NONCE_UUID, clientNonce)
+                    BleManager.CLIENT_NONCE_UUID -> {
+                        val dataToSign = nonce!! + clientNonce
+                        var signature = Signature.getInstance("SHA256withECDSA").apply {
+                            initSign(keyPair.private)
+                            update(dataToSign)
+                        }.sign()
+                        signature = keyManager.toRawSignature(signature)
+                        bleManager?.writeCharacteristic(gatt, BleManager.AUTHENTICATE_UUID, signature)
+                    }
+                    BleManager.AUTHENTICATE_UUID -> bleManager?.readCharacteristic(gatt, BleManager.AUTHENTICATE_ACK_UUID)
+                }
+            } else {
+                isOperationInProgress = false
+                processOperationQueue()
+            }
         }
 
         override fun onCharacteristicRead(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
@@ -197,7 +245,6 @@ class AdminDashboardActivity : AppCompatActivity() {
                     }
                     BleManager.MANAGEMENT_PARAM_VAL_UUID -> {
                         val configValue = ByteBuffer.wrap(value).order(ByteOrder.LITTLE_ENDIAN).int
-                        Log.d(TAG, "Config value: $configValue op $currentOperationContext")
                         when (currentOperationContext) {
                             BleOperationContext.GET_SINGLE_CONFIG -> {
                                 val mgmtFragment = supportFragmentManager.findFragmentByTag("f0") as? ManagementFragment
@@ -232,6 +279,23 @@ class AdminDashboardActivity : AppCompatActivity() {
                             runOnUiThread {
                                 it.binding.deviceNameEditText.setText(deviceName)
                             }
+                        }
+                    }
+                    BleManager.NONCE_UUID -> {
+                        if (currentOperationContext == BleOperationContext.MANUAL_CONTROL) {
+                            nonce = value
+                            clientNonce = ByteArray(32)
+                            SecureRandom().nextBytes(clientNonce)
+                            bleManager?.writeCharacteristic(gatt, BleManager.CLIENT_KEY_UUID, rawPublicKey)
+                        }
+                    }
+                    BleManager.AUTHENTICATE_ACK_UUID -> {
+                        if (currentOperationContext == BleOperationContext.MANUAL_CONTROL) {
+                            val success = value.firstOrNull() == 1.toByte()
+                            runOnUiThread {
+                                Toast.makeText(this@AdminDashboardActivity, "Manual control success: $success", Toast.LENGTH_SHORT).show()
+                            }
+                            currentOperationContext = BleOperationContext.NONE
                         }
                     }
                 }
