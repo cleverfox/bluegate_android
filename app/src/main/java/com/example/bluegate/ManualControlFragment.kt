@@ -27,11 +27,11 @@ class ManualControlFragment : Fragment() {
         val adminActivity = activity as AdminDashboardActivity
 
         binding.manualOpenButton.setOnClickListener {
-            adminActivity.manualControl(2) // 2 for Open
+            adminActivity.authenticate(2) { adminActivity.finish() } // 2 for Open
         }
 
         binding.manualCloseButton.setOnClickListener {
-            adminActivity.manualControl(3) // 3 for Close
+            adminActivity.authenticate(3) { adminActivity.finish() } // 3 for Close
         }
     }
 

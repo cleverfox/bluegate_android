@@ -8,8 +8,9 @@ import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.viewModels
@@ -37,6 +38,7 @@ class AdminDashboardActivity : AppCompatActivity() {
     private lateinit var rawPublicKey: ByteArray
     private lateinit var clientNonce: ByteArray
     private lateinit var keyManager: KeyManager
+    private val handler = Handler(Looper.getMainLooper())
 
     // Queue for sequential BLE operations
     private val operationQueue = ArrayDeque<Runnable>()
@@ -175,6 +177,17 @@ class AdminDashboardActivity : AppCompatActivity() {
             queueOperation { bleManager?.writeCharacteristic(gatt, BleManager.ACTION_UUID, byteArrayOf(actionId.toByte())) }
             queueOperation { bleManager?.readCharacteristic(gatt, BleManager.NONCE_UUID) }
         }
+    }
+
+    fun authenticate(action: Int, onAuthResult: ((Boolean) -> Unit)? = null) {
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            return
+        }
+        val device = bluetoothGatt?.device
+            ?: deviceAddress?.let { bleManager?.bluetoothAdapter?.getRemoteDevice(it) }
+            ?: return
+        val authenticator = Authenticator(this, bleManager, keyPair, rawPublicKey, keyManager, handler)
+        authenticator.authenticate(device, null, action, onAuthResult = onAuthResult)
     }
 
     private val gattCallback = object : BluetoothGattCallback() {

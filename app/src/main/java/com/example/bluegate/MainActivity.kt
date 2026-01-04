@@ -13,7 +13,6 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.content.ClipData
 import android.content.ClipboardManager
-import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -32,8 +31,6 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import com.example.bluegate.databinding.ActivityMainBinding
 import java.security.KeyPair
 import java.security.KeyStore
-import java.security.Signature
-import java.security.SecureRandom
 import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
@@ -43,7 +40,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var deviceListAdapter: DeviceListAdapter
     private lateinit var keyPair: KeyPair
     private lateinit var rawPublicKey: ByteArray
-    private lateinit var clientNonce: ByteArray
     private lateinit var keyManager : KeyManager
 
     private val handler = Handler(Looper.getMainLooper())
@@ -288,97 +284,17 @@ class MainActivity : AppCompatActivity() {
         authenticate(result.device, view, 0x01)
     }
 
-    @SuppressLint("MissingPermission")
     private fun authenticate(device: BluetoothDevice, view: View?, action: Int) {
-        Log.d(TAG, "Authenticating for device ${device.address}, action: $action")
-        bleManager?.connect(device, object : BluetoothGattCallback() {
-            var nonce: ByteArray? = null
-
-            @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-            override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-                Log.d(TAG, "Auth Connection state change: status=$status, newState=$newState")
-                if (status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothProfile.STATE_CONNECTED) {
-                    clientNonce = ByteArray(32)
-                    SecureRandom().nextBytes(clientNonce)
-                    Log.d(TAG, "Auth Connected, requesting MTU")
-                    gatt.requestMtu(85) // common “max” on Android
-                } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                    view?.let { handler.post { it.setBackgroundColor(Color.WHITE) } }
-                    bleManager?.disconnect(gatt)
-                }
+        val authenticator = Authenticator(this, bleManager, keyPair, rawPublicKey, keyManager, handler)
+        authenticator.authenticate(
+            device,
+            view,
+            action,
+            onAdminAuthorized = {
+                val intent = Intent(this@MainActivity, AdminDashboardActivity::class.java)
+                intent.putExtra("device_address", it.address)
+                startActivity(intent)
             }
-
-            override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
-                Log.d(TAG, "Auth MTU changed: mtu=$mtu, status=$status")
-                if (status == BluetoothGatt.GATT_SUCCESS) {
-                    gatt.discoverServices()
-                }
-            }
-
-            override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-                if (action == 0x01) {
-                    bleManager?.readCharacteristic(gatt, BleManager.NONCE_UUID)
-                }else{
-                    bleManager?.writeCharacteristic(gatt, BleManager.ACTION_UUID, byteArrayOf(action.toByte()))
-                }
-            }
-
-            override fun onCharacteristicRead(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
-                when (characteristic.uuid) {
-                    BleManager.NONCE_UUID -> {
-                        nonce = value
-                        bleManager?.writeCharacteristic(gatt, BleManager.CLIENT_KEY_UUID, rawPublicKey)
-                    }
-                    BleManager.AUTHENTICATE_ACK_UUID -> {
-                        val success = value.firstOrNull() == 1.toByte()
-                        Log.d(TAG, "Auth successful: $success")
-                        view?.let {
-                            handler.post { it.setBackgroundColor(if (success) Color.GREEN else Color.RED) }
-                            handler.postDelayed({ bleManager?.createFadeAnimator(it)?.start() }, 2000)
-                        }
-                        if (success && (action and 0x80 == 0x80 )) {
-                            bleManager?.readCharacteristic(gatt, BleManager.PERMISSIONS_UUID)
-                        } else {
-                            bleManager?.disconnect(gatt)
-                        }
-                    }
-                    BleManager.PERMISSIONS_UUID -> {
-                        val permissions = value.firstOrNull()?.toInt() ?: 0
-                        if ((permissions and 0x80) == 0x80) { // is admin
-                            val intent = Intent(this@MainActivity, AdminDashboardActivity::class.java)
-                            intent.putExtra("device_address", gatt.device.address)
-                            startActivity(intent)
-                        } else {
-                            runOnUiThread {
-                                Toast.makeText(this@MainActivity, "Not an admin.", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                        bleManager?.disconnect(gatt)
-                    }
-                }
-            }
-
-            override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
-                when (characteristic.uuid) {
-                    BleManager.ACTION_UUID -> bleManager?.readCharacteristic(gatt, BleManager.NONCE_UUID)
-                    BleManager.CLIENT_KEY_UUID -> bleManager?.writeCharacteristic(gatt, BleManager.CLIENT_NONCE_UUID, clientNonce)
-                    BleManager.CLIENT_NONCE_UUID -> {
-                        val dataToSign = nonce!! + clientNonce
-                        var signature = Signature.getInstance("SHA256withECDSA").apply {
-                            initSign(keyPair.private)
-                            update(dataToSign)
-                        }.sign()
-                        signature = keyManager.toRawSignature(signature)
-                        bleManager?.writeCharacteristic(gatt, BleManager.AUTHENTICATE_UUID, signature)
-                    }
-                    BleManager.AUTHENTICATE_UUID -> {
-                        bleManager?.readCharacteristic(gatt, BleManager.AUTHENTICATE_ACK_UUID)
-                    }
-                    BleManager.ACTION_UUID -> {
-                        bleManager?.readCharacteristic(gatt, BleManager.AUTHENTICATE_ACK_UUID)
-                    }
-                }
-            }
-        })
+        )
     }
 }
