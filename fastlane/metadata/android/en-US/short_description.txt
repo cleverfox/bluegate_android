@@ -1,0 +1,1 @@
+Android client to control bluegate BLE gate controller

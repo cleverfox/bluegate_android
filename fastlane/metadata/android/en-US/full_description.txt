@@ -1,0 +1,18 @@
+Android client to control bluegate BLE gate controller
+Bluegate is open firmware for esp32c6 controller to control garage door or
+gate over BLE with secp256r1 keys and ECDSA signatures
+
+Features:
+  - Generate and store secp256r1 keypair and display public key for sending 
+  to gate's admin over your favorite messenger
+  - Authenticate itself on gate controller using ECDSA
+  - Tool for administrating bluegate controller: keys, settings, logs
+
+Permissions required:
+  - BLUETOOTH Interact over bluetooth
+  - BLUETOOTH_ADMIN Enable bluetooth if disabled
+  - ACCESS_FINE_LOCATION Required to be able to scan bluetooth
+  - BLUETOOTH_SCAN Scan BLE devices
+  - BLUETOOTH_CONNECT Connect to BLE devices
+
+App does not require internet access, and not trying to detect your location
