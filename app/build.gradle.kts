@@ -4,13 +4,13 @@ plugins {
 }
 
 android {
-    namespace = "com.example.bluegate"
+    namespace = "org.cleverfox.bluegate"
     compileSdk {
         version = release(36)
     }
 
     defaultConfig {
-        applicationId = "com.example.bluegate"
+        applicationId = "org.cleverfox.bluegate"
         minSdk = 30
         targetSdk = 36
         versionCode = 1

@@ -1,0 +1,21 @@
+package org.cleverfox.bluegate
+
+import androidx.fragment.app.Fragment
+import androidx.fragment.app.FragmentActivity
+import androidx.viewpager2.adapter.FragmentStateAdapter
+
+class ViewPagerAdapter(fragmentActivity: FragmentActivity) : FragmentStateAdapter(fragmentActivity) {
+
+    override fun getItemCount(): Int = 5
+
+    override fun createFragment(position: Int): Fragment {
+        return when (position) {
+            0 -> ManagementFragment()
+            1 -> ParametersFragment()
+            2 -> ManualControlFragment()
+            3 -> KeysFragment()
+            4 -> LogsFragment()
+            else -> throw IllegalStateException("Invalid position")
+        }
+    }
+}
